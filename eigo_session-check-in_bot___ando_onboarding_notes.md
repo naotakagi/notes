@@ -1,166 +1,183 @@
-# Eigo session-check-in bot / Ando onboarding notes
+# Eigo session-check-in bot / Ando さんオンボーディングメモ
 
 #eigo #prospace #slackbot #infra #onboarding
 
-# Eigo session-check-in bot / Ando onboarding notes
-
 Date: 2026-05-17
 
-## Context
+## 背景
 
-Izumi Ando shared updates about the session-check-in bot and asked for repository/admin access, possible GCP access, production code protection, and an explanation of the development flow: ticket creation -> development -> staging verification -> deploy -> report.
+Izumi Ando さんから、session-check-in bot について共有と相談があった。相談内容は、リポジトリや Admin 権限、必要に応じた GCP アクセス、本番コードの保護、そして「チケット作成 -> 開発 -> ステージング確認 -> デプロイ -> 報告」という開発フローの説明について。
 
-The bot repository has been transferred to prospaceinc/session-check-in-bot. The transfer notification itself requires no action.
+bot のリポジトリは `prospaceinc/session-check-in-bot` に移管済み。移管通知そのものには追加対応は不要。
 
-## Current bot shape
+## 現在の bot の形
 
 Repository: https://github.com/prospaceinc/session-check-in-bot
 
-Current implementation is a small Node.js Slack Events bot using Slack Bolt.
+現状は Slack Bolt を使った小さな Node.js の Slack Events bot。
 
-Files observed:
-- index.js: main bot logic
-- package.json / package-lock.json: Node dependencies and scripts
-- dp_map.csv: Discussion Partner name -> Slack user ID mapping
-- slack-prospaceinc-members.csv: Slack member export/reference data
-- README.md: local setup and Slack App configuration
-- DEPLOYMENT.md: Railway deployment guide
-- TEST_PLAN.md: manual test plan
+確認したファイル:
 
-Runtime/spec:
+- `index.js`: bot 本体のロジック
+- `package.json` / `package-lock.json`: Node 依存関係と scripts
+- `dp_map.csv`: Discussion Partner 名から Slack user ID への対応表
+- `slack-prospaceinc-members.csv`: Slack メンバーのエクスポート/参照データ
+- `README.md`: ローカルセットアップと Slack App 設定
+- `DEPLOYMENT.md`: Railway デプロイ手順
+- `TEST_PLAN.md`: 手動テスト計画
+
+実行環境/仕様:
+
 - Node.js
-- @slack/bolt
-- Starts with npm start -> node index.js
-- Slack endpoint is Bolt default /slack/events
-- No DB
-- No persistent state
-- Config is env vars + dp_map.csv
-- Current docs assume Railway deployment
+- `@slack/bolt`
+- `npm start` -> `node index.js` で起動
+- Slack endpoint は Bolt デフォルトの `/slack/events`
+- DB なし
+- 永続 state なし
+- 設定は環境変数 + `dp_map.csv`
+- 現在のドキュメントは Railway デプロイ前提
 
-Required env vars:
-- SLACK_BOT_TOKEN
-- SLACK_SIGNING_SECRET
-- MY_USER_ID
-- STAFF_USER_ID_1
-- STAFF_USER_ID_2
-- CHANNEL_ID
-- PORT
+必要な環境変数:
 
-Required Slack scopes documented:
-- channels:history
-- channels:read
-- chat:write
-- im:write
-- mpim:write
-- users:read
+- `SLACK_BOT_TOKEN`
+- `SLACK_SIGNING_SECRET`
+- `MY_USER_ID`
+- `STAFF_USER_ID_1`
+- `STAFF_USER_ID_2`
+- `CHANNEL_ID`
+- `PORT`
 
-## Current processing flow
+ドキュメント上必要とされている Slack scopes:
 
-1. Eigo app posts a no-show notification to Slack #need_operation.
-2. Slack Events API sends message.channels event to the bot.
-3. Bot checks the channel equals CHANNEL_ID.
-4. Bot checks message text contains required Japanese markers.
-5. Bot parses the line after 受講生 as learner name.
-6. Bot parses the line after ディスカッションパートナー as DP name.
-7. Bot looks up DP name in dp_map.csv.
-8. If found, bot opens group DM with DP + MY_USER_ID + STAFF_USER_ID_1 + STAFF_USER_ID_2 using conversations.open.
-9. Bot posts a follow-up message to that group DM.
-10. If not found, bot posts an alert to #need_operation and DMs MY_USER_ID.
+- `channels:history`
+- `channels:read`
+- `chat:write`
+- `im:write`
+- `mpim:write`
+- `users:read`
 
-## Important design observation
+## 現在の処理フロー
 
-The current shape is indirect:
+1. Eigo app が no-show 通知を Slack の `#need_operation` に投稿する。
+2. Slack Events API が `message.channels` event を bot に送る。
+3. bot が channel が `CHANNEL_ID` と一致するか確認する。
+4. bot が message text に必要な日本語マーカーが含まれるか確認する。
+5. bot が `受講生` の次の行から learner 名を parse する。
+6. bot が `ディスカッションパートナー` の次の行から DP 名を parse する。
+7. bot が DP 名を `dp_map.csv` で引く。
+8. 見つかった場合、`conversations.open` で DP + `MY_USER_ID` + `STAFF_USER_ID_1` + `STAFF_USER_ID_2` の group DM を開く。
+9. bot がその group DM に follow-up message を投稿する。
+10. 見つからなかった場合、`#need_operation` に alert を投稿し、`MY_USER_ID` に DM する。
 
-Eigo detects no-show -> Slack notification -> Slack bot parses Slack message -> group DM
+## 重要な設計上の観察
 
-But Eigo already has the session, learner, and DP information before posting the Slack notification. The cleaner long-term design is:
+現在の形は少し遠回りになっている。
 
-Eigo detects no-show -> Slack notification + group DM follow-up directly
+```text
+Eigo が no-show を検知 -> Slack 通知 -> Slack bot が Slack message を parse -> group DM
+```
 
-This would remove Slack message parsing, Slack Events webhook handling, separate bot deployment, cold start concerns, duplicate event handling, and one extra secret/deploy surface.
+ただし Eigo は Slack 通知を投稿する前の時点で、session / learner / DP の情報をすでに持っている。長期的によりきれいな設計は次の形。
 
-## Deployment options
+```text
+Eigo が no-show を検知 -> Slack 通知 + group DM follow-up を直接実行
+```
 
-### Option A: Keep Railway for now
+これにすると、Slack message parsing、Slack Events webhook、別 bot のデプロイ、cold start、重複 event handling、追加の secret/deploy surface を減らせる。
 
-Recommended short-term option.
+## デプロイ選択肢
+
+### Option A: 当面 Railway のままにする
+
+短期的には推奨。
 
 Pros:
-- Already documented and likely already running.
-- Ando can iterate easily.
-- Separate repo/deploy is convenient for a small automation.
-- Avoids GCP/Terraform work before the long-term design is clear.
+
+- すでにドキュメント化されていて、おそらく稼働済み。
+- Ando さんが iteraton しやすい。
+- 小さな自動化としては repo/deploy が分かれているのは便利。
+- 長期設計が固まる前に GCP/Terraform 作業を増やさずに済む。
 
 Requirements:
-- Move Railway project/admin ownership under Prospace or make Prospace owner visible.
-- Keep repo under prospaceinc/session-check-in-bot.
-- Let Ando work on bot code and verification.
-- Keep production secrets and owner-level operations controlled by Satoshi/Nao.
 
-### Option B: Move external bot to GCP Cloud Run
+- Railway project/admin ownership を Prospace 配下に移す、または Prospace owner が見える状態にする。
+- repo は `prospaceinc/session-check-in-bot` 配下に置く。
+- Ando さんには bot code と検証を進めてもらう。
+- production secrets と owner-level operation は Satoshi/Nao が管理する。
 
-Possible, but not the best first move.
+### Option B: 外部 bot のまま GCP Cloud Run に移す
 
-Pros:
-- Prospace-controlled infrastructure.
-- IAM, Secret Manager, logging, billing are cleaner.
-- Can be Terraform-managed.
-
-Cons:
-- Still keeps the indirect architecture: Eigo -> Slack -> bot -> Slack DM.
-- Adds Cloud Run, Secret Manager, Artifact Registry, deploy pipeline, Slack URL switch, and monitoring work.
-- If Cloud Run min instances is 0, Slack Events may be affected by cold starts. Slack expects fast 2xx responses. If using Cloud Run, either set min instances 1 or change implementation to immediate ack + async processing.
-
-### Option C: Integrate into Eigo
-
-Recommended long-term option if this workflow remains valuable.
+可能ではあるが、最初にやることとしては最適ではない。
 
 Pros:
-- No extra bot deployment required.
-- No Slack notification parsing.
-- Eigo has canonical learner/DP/session data.
-- Easier to avoid name mismatch and duplicate handling.
+
+- Prospace 管理の infrastructure になる。
+- IAM、Secret Manager、logging、billing は整理しやすい。
+- Terraform 管理も可能。
 
 Cons:
-- Requires eigo production code changes.
-- Needs Nao review and controlled deploy.
-- Not as easy for Ando to iterate independently.
 
-## Terraform / infra management
+- 間接的な architecture は残る: Eigo -> Slack -> bot -> Slack DM
+- Cloud Run、Secret Manager、Artifact Registry、deploy pipeline、Slack URL 切り替え、monitoring が追加で必要になる。
+- Cloud Run の min instances が 0 の場合、Slack Events が cold start の影響を受ける可能性がある。Slack は速い 2xx 応答を期待するため、Cloud Run にするなら min instances 1 にするか、即 ack + async processing に変える必要がある。
 
-There is an old eigo PR #514, Add infra codes, adding GCP Terraform structure. It shows there was a real intent to manage Prospace/Eigo infrastructure as code.
+### Option C: Eigo に統合する
 
-Important point: having Terraform in eigo repo and app code in a separate bot repo is normal. Terraform can manage deploy targets/resources for an app whose source lives elsewhere.
+この workflow が今後も重要なら長期的には推奨。
 
-Possible structure:
-- prospaceinc/eigo: infra/terraform/... for Prospace/Eigo GCP infra management
-- prospaceinc/session-check-in-bot: bot application code
+Pros:
 
-This is not inherently a problem, but it must be documented so people know where the infra for the bot lives.
+- 追加の bot deployment が不要。
+- Slack notification parsing が不要。
+- Eigo が learner / DP / session の canonical data を持っている。
+- 名前ズレや重複処理を避けやすい。
 
-Terraform makes Ando involvement safer because infra changes can be reviewed as code:
+Cons:
 
+- eigo production code の変更が必要。
+- Nao review と controlled deploy が必要。
+- Ando さんが独立して iterate するには外部 bot よりやりにくい。
+
+## Terraform / infra 管理
+
+古い eigo PR #514 `Add infra codes` で GCP Terraform 構成を追加しようとしていた形跡がある。Prospace/Eigo の infrastructure を code 管理しようという意図は実際にあった。
+
+重要なのは、Terraform が eigo repo にあり、app code が別 bot repo にあること自体は普通にあり得るという点。Terraform は、source が別 repo にある app の deploy target/resource を管理できる。
+
+あり得る構成:
+
+- `prospaceinc/eigo`: `infra/terraform/...` で Prospace/Eigo GCP infra を管理
+- `prospaceinc/session-check-in-bot`: bot application code
+
+これはそれ自体は問題ではない。ただし bot の infra がどこにあるかをドキュメント化しておく必要がある。
+
+Terraform 化すると、infra change を code review できるので Ando さんの関与も安全にしやすい。
+
+```text
 branch -> Terraform code change -> PR -> terraform plan review -> approved apply
+```
 
-Console-only Railway/GCP changes are harder to review because they do not leave a complete Git trail.
+Railway/GCP console だけで変更すると、完全な Git trail が残らないため review しづらい。
 
-## Permissions / Ando involvement
+## 権限 / Ando さんの関与
 
-Do not start by granting broad production infrastructure permissions.
+最初から広い production infrastructure 権限を渡すべきではない。
 
-Reason: infrastructure changes often have wider impact than the visible task. The issue is not ability; it is auditability, reversibility, and blast radius.
+理由は、infra change は見えている task より影響範囲が広くなりやすいため。能力の問題ではなく、auditability、reversibility、blast radius の問題。
 
-Reasonable to allow:
-- bot repo code changes
-- branch creation and PRs
-- bot behavior changes
-- Railway development/test deploys if scoped to the bot project
-- log checking for the bot project
+許可してよさそうな範囲:
+
+- bot repo の code change
+- branch 作成と PR
+- bot behavior の変更
+- bot project に scope された Railway development/test deploy
+- bot project の log 確認
 - staging verification
-- dp_map.csv updates
+- `dp_map.csv` 更新
 
-Be careful with:
-- repo/org Admin as a standing permission
+注意が必要な範囲:
+
+- repo/org Admin の常時権限
 - eigo production deploy
 - eigo production DB/secrets
 - GCP IAM
@@ -169,76 +186,84 @@ Be careful with:
 - Slack production token/signing secret
 - Railway production env var changes
 
-Good initial boundary:
-- Ando can own bot app iteration and staging/test confirmation.
-- Nao/Satoshi manage production secrets, deploy ownership, GCP IAM, and production deploy.
-- If infra is Terraform-managed, Ando can propose PRs and Nao/Satoshi review plan/apply.
+最初の境界線としては次がよい。
+
+- Ando さんは bot app の iteration と staging/test confirmation を担当できる。
+- Nao/Satoshi は production secrets、deploy ownership、GCP IAM、production deploy を管理する。
+- infra が Terraform 管理なら、Ando さんは PR を出し、Nao/Satoshi が plan/apply を review する。
 
 ## GitHub / production protection
 
-Write permission alone is not enough to protect production code. If a Write user can create PR and merge to main/master, they can change production code.
+Write permission だけでは production code protection として不十分。Write user が PR を作って main/master に merge できるなら、production code を変更できる。
 
-Protection should separate ability to propose changes from ability to land/deploy them:
-- no direct push to main/master
-- PR required
-- merge requires trusted review for eigo body changes
-- production deploy is controlled by Nao/Owner
-- repo settings/secrets/rulesets are Admin/Owner only
+提案する能力と、land/deploy する能力を分けるべき。
 
-Caveat: repo-wide required reviews mean Nao also needs someone else to approve Nao PRs. This may be too heavy for one-person operation. For eigo, use rules carefully or start with operational rule + branch protection, then tighten later.
+- main/master への direct push 禁止
+- PR 必須
+- eigo 本体への変更は trusted review が必要
+- production deploy は Nao/Owner が control
+- repo settings/secrets/rulesets は Admin/Owner のみ
+
+注意点: repo-wide required reviews にすると、Nao の PR も誰か別の approve が必要になる。一人運用では重すぎる可能性がある。eigo では rules を慎重に使うか、まず operational rule + branch protection から始め、必要に応じて締めるのがよい。
 
 ## Staging access / IAP notes
 
-The staging docs describe Google Cloud IAP, not Basic Auth.
+staging docs が説明しているのは Basic Auth ではなく Google Cloud IAP。
 
-There are two layers:
-1. Access to staging site itself via Google login + IAP.
-2. Application login inside Prospace admin/corp/learner/partner.
+layer は 2 つある。
 
-@prospace.co.jp accounts may already pass staging IAP for browser access.
+1. Google login + IAP による staging site 自体への access
+2. Prospace admin/corp/learner/partner 内での application login
 
-SSH/GCP console/service management is separate and requires IAM/OS Login/GKE/Compute permissions. IAP-secured Web App User is not enough for SSH or service management.
+`@prospace.co.jp` account は、browser access 用の staging IAP をすでに通れる可能性がある。
 
-A screenshot of eigo-staging IAM suggests current access may be direct IAM user assignment rather than the old developer/debug Google Groups documented earlier. For Ando, start with debug/staging-viewer level, not Editor/Project IAM Admin.
+SSH/GCP console/service management は別で、IAM/OS Login/GKE/Compute permissions が必要。IAP-secured Web App User だけでは SSH や service management はできない。
+
+eigo-staging IAM の screenshot を見る限り、現在の access は以前ドキュメントにあった developer/debug Google Groups ではなく、直接 IAM user assignment になっている可能性がある。Ando さんには Editor/Project IAM Admin ではなく、debug/staging-viewer level から始めるのがよい。
 
 ## Development flow onboarding
 
-Ando asked to learn ticket creation -> development -> staging verification -> deploy -> report.
+Ando さんは「チケット作成 -> 開発 -> ステージング確認 -> デプロイ -> 報告」を知りたいと言っている。
 
-Suggested approach:
-- First share existing documentation.
-- Explain full flow at a high level.
-- Because staging is a single shared environment, emphasize coordination before staging checks.
-- Production deploy remains Nao/Owner-controlled at first.
+進め方の案:
 
-Flow to explain:
-1. Ticket: purpose, background, expected behavior, repro/impact if bug.
-2. Development: branch, small changes, tests where meaningful, no production secrets.
-3. PR: summary, verification steps, impact scope, reviewer request.
-4. Staging: coordinate timing because staging is shared; beware real email/SMS notifications even in staging; record results.
-5. Deploy: production deploy only after agreement; Nao/Owner executes initially.
-6. Report: what changed, what was verified, remaining issues.
+- まず既存ドキュメントを共有する。
+- 全体フローを high level で説明する。
+- staging は単一の shared environment なので、staging check 前の coordination を強調する。
+- production deploy は最初は Nao/Owner controlled のままにする。
 
-Need to ask Ando before deciding permissions:
-- Is this one-off bot improvement or ongoing automation work?
-- Will she work on eigo body code too?
-- How often does she expect to make changes?
-- Does she need staging verification only, or production deploy involvement?
-- What does she expect Nao/Satoshi to do?
+説明するフロー:
 
-## Suggested near-term stance
+1. Ticket: 目的、背景、期待する挙動、bug なら再現手順/影響範囲。
+2. Development: branch、small changes、意味のある範囲で tests、production secrets は触らない。
+3. PR: summary、verification steps、impact scope、reviewer request。
+4. Staging: staging は共有環境なので timing を調整する。staging でも実メール/SMS 通知に注意する。結果を記録する。
+5. Deploy: production deploy は合意後のみ。最初は Nao/Owner が実行する。
+6. Report: 何を変えたか、何を確認したか、残課題。
 
-Short term:
-- Keep session-check-in-bot separate and on Railway.
-- Bring Railway ownership/visibility under Prospace.
-- Let Ando iterate on bot code and test flow.
-- Keep production secrets/deploy/admin controlled by Nao/Satoshi.
-- Share development/staging docs and coordinate staging use.
+権限を決める前に Ando さんに聞くこと:
 
-Medium term:
-- If the workflow continues to matter, consider implementing the follow-up DM directly in eigo where no-show is detected.
+- これは一回限りの bot 改善か、継続的な automation work か。
+- eigo 本体の code も触る予定があるか。
+- どれくらいの頻度で変更する想定か。
+- staging verification だけ必要なのか、production deploy involvement も必要なのか。
+- Nao/Satoshi に何を期待しているか。
 
-Long term:
-- Continue or revive Terraform/IaC direction for Prospace/Eigo infra.
-- Let infra changes be proposed by PR and reviewed with plan before apply.
+## 当面の推奨スタンス
 
+短期:
+
+- `session-check-in-bot` は別 repo のまま Railway で維持する。
+- Railway ownership/visibility を Prospace 配下に寄せる。
+- Ando さんには bot code と test flow を iterate してもらう。
+- production secrets/deploy/admin は Nao/Satoshi が管理する。
+- development/staging docs を共有し、staging 利用は調整する。
+
+中期:
+
+- この workflow が今後も重要なら、no-show 検知箇所で Eigo から直接 follow-up DM を送る実装を検討する。
+
+長期:
+
+- Prospace/Eigo infra は Terraform/IaC 方針を継続または復活させる。
+- infra change は PR で提案し、plan を review してから apply する。
