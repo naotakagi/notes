@@ -26,8 +26,10 @@
 
   nb notebooks            # notebook 一覧
   nb notebooks current    # 今どこを見てるか
-  nb use knowledge-notes  # notes 用に戻す
-  nb use knowledge        # knowledge 全体を見る
+  nb use notes            # notes 用に戻す
+
+  knowledge は nb 管理しない。直接 repo を開く。
+  cd ~/ghq/github.com/naotakagi/knowledge
 
   要するに日常運用はほぼこれです。
 
@@ -35,5 +37,4 @@
   notes
   noted 1
   nb search foo
-
 
